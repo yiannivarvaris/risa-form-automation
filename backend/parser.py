@@ -8,7 +8,7 @@ LOGGER = logging.getLogger(__name__)
 
 RACE_HEADER_RE = re.compile(r"\bRace\s*(\d+)\b", re.IGNORECASE)
 RUNNER_LINE_RE = re.compile(r"^\s*(\d{1,2})(?:[A-Za-z])?\s+")
-RUNNER_TABLE_HEADER_RE = re.compile(r"\bNo\b.*\bHorse\b.*\bTrainer\b.*\bJockey\b", re.IGNORECASE)
+RUNNER_TABLE_HEADER_RE = re.compile(r"\bNo\b.*\bHorse\b", re.IGNORECASE)
 AGE_SEX_RE = re.compile(r"\b(\d{1,2})([FGCMR])\b")
 RATING_RE = re.compile(r"\bRtg\s*(\d+)\b", re.IGNORECASE)
 DECLARED_CD_RE = re.compile(r"(\d{1,2}(?:\.\d)?)kg\s*\(\s*cd\s*(\d{1,2}(?:\.\d)?)kg\s*\)", re.IGNORECASE)
@@ -19,7 +19,7 @@ TRIAL_MARKERS = ("trial", "jump-out", "jump out", "jumpout")
 
 SUSPICIOUS_NAME_FRAGMENTS = (
     "year old", "sire:", "dam:", "trainer:", "jockey:", "record:",
-    "breeder:", "owners:", "colours:", "of ", "1st", "2nd", "last race",
+    "breeder:", "owners:", "colours:", "1st", "2nd", "last race",
     "other information", "true odds", "actual odds",
 )
 
@@ -202,31 +202,49 @@ def _is_suspicious_line(line: str) -> bool:
 
 
 def _extract_runner_table_lines(race_lines: list[str], race_number: int) -> list[str]:
-    header_idx = next((i for i, line in enumerate(race_lines) if _looks_like_runner_table_header(line)), None)
+    header_idx = next((i for i, line in enumerate(race_lines[:120]) if _looks_like_runner_table_header(line)), None)
     if header_idx is None:
-        LOGGER.warning("race %s: official runner table header not found; skipping race", race_number)
-        return []
+        # Handle split headers (e.g. "No" on one line and "Horse" on another).
+        for i in range(min(120, len(race_lines) - 1)):
+            merged = f"{race_lines[i].strip()} {race_lines[i + 1].strip()}".strip()
+            if _looks_like_runner_table_header(merged) or ("no" in merged.lower() and "horse" in merged.lower()):
+                header_idx = i
+                break
+
+    if header_idx is None:
+        LOGGER.warning("race %s: official runner table header not found; attempting early-race scan", race_number)
+        header_idx = 0
 
     runner_lines: list[str] = []
+    started = False
+    non_runner_streak = 0
+    stop_markers = re.compile(
+        r"\b(?:Last race|Other Information|True Odds|Actual Odds|Runner\s+RWF|RWFS|RBFS|Sire:|Dam:|Record:)\b",
+        re.IGNORECASE,
+    )
+
     for line in race_lines[header_idx + 1 :]:
         stripped = line.strip()
         if not stripped:
-            if runner_lines:
+            if started:
                 break
             continue
         if RACE_HEADER_RE.search(stripped):
             break
-        if _looks_like_runner_table_header(stripped):
+        if _looks_like_runner_table_header(stripped) or re.fullmatch(r"(No|Horse|Trainer|Jockey|Barrier|Weight|Rating|Last\s*10|Form|Wt)", stripped, re.IGNORECASE):
             continue
-        if re.search(r"\b(?:Last race|Other Information|True Odds|Actual Odds|Runner\s+RWF|RWFS|RBFS)\b", stripped, re.IGNORECASE):
+        if stop_markers.search(stripped):
             break
-        if _is_suspicious_line(stripped):
-            LOGGER.info("race %s: skipped suspicious table line: %s", race_number, stripped)
-            continue
         if RUNNER_LINE_RE.match(stripped):
             runner_lines.append(stripped)
+            started = True
+            non_runner_streak = 0
             continue
-        if runner_lines:
+        if started:
+            non_runner_streak += 1
+            if non_runner_streak >= 2:
+                break
+        if runner_lines and not started:
             break
 
     if not runner_lines:
@@ -266,28 +284,24 @@ def parse_races_from_text(text: str) -> list[dict[str, Any]]:
         race = {"race_number": race_number, "race_name": f"Race {race_number}", "horses": []}
 
         table_lines = _extract_runner_table_lines(race_lines, race_number)
-        if table_lines:
-            LOGGER.info("race %s runner table text used:\n%s", race_number, "\n".join(table_lines))
+        LOGGER.info("race %s raw candidate runner lines:\n%s", race_number, "\n".join(table_lines) if table_lines else "(none)")
 
         runner_line_indexes = [i for i, ln in enumerate(race_lines) if ln.strip() in set(table_lines)]
         for idx_pos, local_line_idx in enumerate(runner_line_indexes):
             line = race_lines[local_line_idx].strip()
-            if _is_suspicious_line(line):
-                LOGGER.info("race %s: skipped suspicious line while extracting runners: %s", race_number, line)
-                continue
 
             number_match = RUNNER_LINE_RE.match(line)
             if not number_match:
-                LOGGER.info("runner line skipped (no saddlecloth match): %s", line)
+                LOGGER.info("race %s rejected line: %s | reason=no saddlecloth match", race_number, line)
                 continue
 
             number = int(number_match.group(1))
             name = _extract_horse_name(line)
-            if not name or _is_suspicious_line(name):
-                LOGGER.info("race %s: skipped invalid name parse from line: %s", race_number, line)
+            if not name:
+                LOGGER.info("race %s rejected line: %s | reason=invalid parsed horse name", race_number, line)
                 continue
 
-            LOGGER.info("race %s extracted runner: %s %s", race_number, number, name)
+            LOGGER.info("race %s accepted runner: %s %s", race_number, number, name)
             age, sex = _extract_age_sex(line)
             current_weight, claim, apprentice_min, adjusted = _extract_current_weights(line)
 
@@ -322,4 +336,6 @@ def parse_races_from_text(text: str) -> list[dict[str, Any]]:
     LOGGER.info("sorted race numbers: %s", [r["race_number"] for r in races])
     horse_count = sum(len(r["horses"]) for r in races)
     LOGGER.info("Extracted %s races and %s horses from guide", len(races), horse_count)
+    if not races or horse_count == 0:
+        raise ValueError("Parser extracted no races or horses from the PDF text.")
     return races

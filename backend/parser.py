@@ -1,6 +1,7 @@
 import fitz
 import re
 
+
 def extract_text_from_pdf(pdf_path):
     text = ""
 
@@ -15,26 +16,21 @@ def extract_text_from_pdf(pdf_path):
 def clean_horse_name(name):
     name = name.strip()
 
-    junk_words = [
-        "M", "G", "K", "J", "C", "A", "B", "D",
-        "Rtg", "Rating", "Trainer", "Jockey"
-    ]
+    # Remove gear/emergency notes from name
+    name = re.sub(r"\s+\(.*?\)", "", name)
+    name = re.sub(r"\s+EM$", "", name)
 
-    parts = name.split()
-
-    while parts and parts[-1] in junk_words:
-        parts.pop()
-
-    return " ".join(parts).strip()
+    return name.strip()
 
 
-def parse_races_from_text(text):
+def extract_races(text):
     races = []
 
-    race_blocks = re.split(r"(?=\bRace\s+\d+\b)", text)
+    # Split each race from the race heading
+    race_blocks = re.split(r"(?=Race\s+\d+\s+-)", text)
 
     for block in race_blocks:
-        race_match = re.search(r"\bRace\s+(\d+)\b", block)
+        race_match = re.search(r"Race\s+(\d+)\s+-", block)
 
         if not race_match:
             continue
@@ -42,35 +38,39 @@ def parse_races_from_text(text):
         race_number = race_match.group(1)
         race_name = f"Race {race_number}"
 
-        horses = []
-        seen_numbers = set()
+        # Find official runner table
+        table_match = re.search(
+            r"No\s+Last\s+10\s+Horse\s+Trainer\s+Jockey\s+Barrier\s+Weight.*?\n(.*?)(?=\nTrainer:|\n\d+\s+[A-Z][A-Z '\-\(\)]+|\nRace\s+\d+\s+-)",
+            block,
+            re.DOTALL
+        )
 
-        lines = block.splitlines()
+        if not table_match:
+            continue
+
+        table_text = table_match.group(1)
+        lines = table_text.splitlines()
+
+        horses = []
 
         for line in lines:
             line = line.strip()
 
-            match = re.match(r"^(\d{1,2})\s+([A-Z][A-Z '\-]+)", line)
+            # Match runner rows:
+            # 1 20x BRAZEN WARRIOR Patrick Payne Billy Egan 16 59.5kg
+            # 15e 5x6969x2 ROUGHNUT Jane Duncan ...
+            match = re.match(
+                r"^(\d{1,2})e?\s+(?:[0-9xX]+)?\s*([A-Z][A-Z '\-\(\)]+?)\s+(?=[A-Z][a-z])",
+                line
+            )
 
             if not match:
                 continue
 
             horse_number = match.group(1)
-
-            if horse_number in seen_numbers:
-                continue
-
             horse_name = clean_horse_name(match.group(2))
 
-            if len(horse_name) < 3:
-                continue
-
-            bad_words = [
-                "RACE", "TRACK", "DISTANCE", "TRAINER",
-                "JOCKEY", "PRIZE", "TOTAL", "FIELD"
-            ]
-
-            if horse_name.upper() in bad_words:
+            if len(horse_name) < 2:
                 continue
 
             horses.append({
@@ -78,17 +78,14 @@ def parse_races_from_text(text):
                 "name": horse_name
             })
 
-            seen_numbers.add(horse_number)
-
-        horses.sort(key=lambda h: int(h["number"]))
-
-        races.append({
-            "race_name": race_name,
-            "horses": horses
-        })
+        if horses:
+            races.append({
+                "race_name": race_name,
+                "horses": horses
+            })
 
     return races
 
 
-def extract_races(text):
-    return parse_races_from_text(text)
+def parse_races_from_text(text):
+    return extract_races(text)

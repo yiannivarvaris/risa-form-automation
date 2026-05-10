@@ -19,6 +19,32 @@ def clean_name(name):
     return name.strip()
 
 
+def extract_horse_name(line):
+    parts = line.split()
+
+    # Remove runner number
+    parts = parts[1:]
+
+    # Remove last-10 form if present
+    if parts and re.match(r"^[0-9xX]+$", parts[0]):
+        parts = parts[1:]
+
+    name_parts = []
+
+    for word in parts:
+        clean_word = word.replace("’", "'")
+
+        if clean_word.isupper() or clean_word in ["(NZ)", "(GB)", "(IRE)", "(USA)", "(Blks)", "EM"]:
+            name_parts.append(word)
+        else:
+            break
+
+    if not name_parts:
+        return None
+
+    return clean_name(" ".join(name_parts))
+
+
 def extract_races(text):
     races = []
 
@@ -26,63 +52,52 @@ def extract_races(text):
 
     for block in race_blocks:
         race_match = re.search(r"Race\s+(\d+)\s+-", block)
+
         if not race_match:
             continue
 
         race_number = race_match.group(1)
         race_name = f"Race {race_number}"
 
-        if "No Last 10 Horse Trainer Jockey Barrier Weight" not in block:
+        header_match = re.search(
+            r"No\s+Last\s+10\s+Horse\s+Trainer\s+Jockey\s+Barrier\s+Weight.*?Hcp\s+Rating",
+            block,
+            re.DOTALL
+        )
+
+        if not header_match:
             continue
 
-        table_part = block.split("No Last 10 Horse Trainer Jockey Barrier Weight", 1)[1]
+        table_start = header_match.end()
+        table_text = block[table_start:]
 
-        if "Trainer:" in table_part:
-            table_part = table_part.split("Trainer:", 1)[0]
+        if "Trainer:" in table_text:
+            table_text = table_text.split("Trainer:", 1)[0]
 
         horses = []
 
-        for line in table_part.splitlines():
+        for line in table_text.splitlines():
             line = line.strip()
 
-            match = re.match(r"^(\d{1,2})e?\s+(.*)", line)
-            if not match:
+            if not re.match(r"^\d{1,2}e?\s+", line):
                 continue
 
-            number = match.group(1)
-            rest = match.group(2).strip()
+            number_match = re.match(r"^(\d{1,2})e?", line)
+            number = number_match.group(1)
 
-            # remove form figures at start
-            rest = re.sub(r"^[0-9xX]+\s+", "", rest)
+            horse_name = extract_horse_name(line)
 
-            words = rest.split()
-            name_words = []
-
-            for word in words:
-                if word.isupper() or word in ["(NZ)", "(GB)", "(IRE)", "(USA)"]:
-                    name_words.append(word)
-                else:
-                    break
-
-            if not name_words:
-                continue
-
-            horse_name = clean_name(" ".join(name_words))
-
-            horses.append({
-                "number": number,
-                "name": horse_name
-            })
+            if horse_name:
+                horses.append({
+                    "number": number,
+                    "name": horse_name
+                })
 
         if horses:
             races.append({
                 "race_name": race_name,
                 "horses": horses
             })
-
-    print("RACES FOUND")
-    for race in races:
-        print(race["race_name"], [h["name"] for h in race["horses"]])
 
     return races
 

@@ -1,3 +1,5 @@
+from excel_writer import create_race_sheet
+from parser import extract_text_from_pdf
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse
 import shutil
@@ -30,7 +32,7 @@ async def generate_form(
     text = extract_text_from_pdf(risa_path)
     print(text[:1000])
 
-    shutil.copy(template_path, output_path)
+    create_race_sheet(template_path, output_path)
 
     return FileResponse(
         output_path,

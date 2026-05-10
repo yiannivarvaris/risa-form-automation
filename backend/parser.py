@@ -6,8 +6,8 @@ import fitz
 
 LOGGER = logging.getLogger(__name__)
 
-RACE_HEADER_RE = re.compile(r"\bRace\s+(\d+)\b", re.IGNORECASE)
-RUNNER_LINE_RE = re.compile(r"^(\d{1,2})e?\s+")
+RACE_HEADER_RE = re.compile(r"\bRace\s*(\d+)\b", re.IGNORECASE)
+RUNNER_LINE_RE = re.compile(r"^\s*(\d{1,2})(?:[A-Za-z])?\s+")
 AGE_SEX_RE = re.compile(r"\b(\d{1,2})([FGCMR])\b")
 RATING_RE = re.compile(r"\bRtg\s*(\d+)\b", re.IGNORECASE)
 DECLARED_CD_RE = re.compile(r"(\d{1,2}(?:\.\d)?)kg\s*\(\s*cd\s*(\d{1,2}(?:\.\d)?)kg\s*\)", re.IGNORECASE)
@@ -15,7 +15,6 @@ CLASS_RE = re.compile(r"\b(BM\d+|CL\d+|MDN|\d+-\d+)\b", re.IGNORECASE)
 DATE_RE = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
 
 TRIAL_MARKERS = ("trial", "jump-out", "jump out", "jumpout")
-
 
 SEX_MAP = {"F": "filly", "G": "gelding", "C": "colt", "M": "mare", "R": "rig"}
 
@@ -48,24 +47,33 @@ def _extract_age_sex(line: str) -> tuple[int | None, str | None]:
 
 
 def _extract_horse_name(line: str) -> str | None:
-    parts = line.split()
-    if len(parts) < 2:
+    # Remove saddlecloth prefix and possible emergency marker.
+    cleaned = re.sub(r"^\s*\d{1,2}[A-Za-z]?\s+", "", line).strip()
+    if not cleaned:
         return None
-    parts = parts[1:]
-    if parts and re.match(r"^[0-9xX]+$", parts[0]):
-        parts = parts[1:]
+
+    # Stop name before obvious metadata columns.
+    tokens = cleaned.split()
+    stop_patterns = (
+        re.compile(r"^\d{1,2}[FGCMR]$", re.IGNORECASE),
+        re.compile(r"^\d{1,2}(?:\.\d)?kg$", re.IGNORECASE),
+        re.compile(r"^(?:Rtg|CD|RFU|DSL)$", re.IGNORECASE),
+        re.compile(r"^\([A-Za-z]{2,4}\)$"),
+    )
 
     name_parts: list[str] = []
-    for word in parts:
-        upper = word.replace("’", "'")
-        if upper.isupper() or upper in {"(NZ)", "(GB)", "(IRE)", "(USA)"}:
-            name_parts.append(word)
-        else:
+    for tok in tokens:
+        if any(pat.match(tok) for pat in stop_patterns):
             break
+        name_parts.append(tok)
 
     if not name_parts:
         return None
-    return " ".join(name_parts).replace(" (Blks)", "").replace(" EM", "").strip()
+
+    name = " ".join(name_parts)
+    name = re.sub(r"\s+\(Blks\)", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\s+EM$", "", name, flags=re.IGNORECASE)
+    return name.strip(" -") or None
 
 
 def _extract_current_weights(line: str) -> tuple[float | None, float | None, float | None, float | None]:
@@ -84,10 +92,6 @@ def _extract_current_weights(line: str) -> tuple[float | None, float | None, flo
 
 
 def _extract_latest_start(horse_block: str, sex: str | None) -> dict[str, Any]:
-    """Heuristic extraction for most recent non-trial previous start.
-
-    Assumption: the first non-trial previous-start line in the horse block is the latest real race.
-    """
     latest_line = None
     for raw_line in horse_block.splitlines():
         line = raw_line.strip()
@@ -95,7 +99,7 @@ def _extract_latest_start(horse_block: str, sex: str | None) -> dict[str, Any]:
             continue
         if any(marker in line.lower() for marker in TRIAL_MARKERS):
             continue
-        if DATE_RE.search(line) and ("kg" in line or "Rtg" in line or "cd" in line):
+        if DATE_RE.search(line) and ("kg" in line or "Rtg" in line or "cd" in line.lower()):
             latest_line = line
             break
 
@@ -150,31 +154,71 @@ def _extract_latest_start(horse_block: str, sex: str | None) -> dict[str, Any]:
     return latest
 
 
+def _is_runner_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if not RUNNER_LINE_RE.match(stripped):
+        return False
+    if RACE_HEADER_RE.search(stripped):
+        return False
+    if re.search(r"\b(?:m|Metres|Prize|Time|No\.|Barrier|Jockey|Trainer)\b", stripped, re.IGNORECASE):
+        return False
+    return True
+
+
 def parse_races_from_text(text: str) -> list[dict[str, Any]]:
+    lines = text.splitlines()
+    race_headers: list[tuple[int, int]] = []
+
+    for i, line in enumerate(lines):
+        m = RACE_HEADER_RE.search(line)
+        if m:
+            race_no = int(m.group(1))
+            race_headers.append((race_no, i))
+
+    # Deduplicate repeated race headers (often in page headers/footers).
+    deduped_headers: list[tuple[int, int]] = []
+    last_seen_line_for_race: dict[int, int] = {}
+    for race_no, idx in race_headers:
+        prev = last_seen_line_for_race.get(race_no)
+        if prev is None or idx - prev > 20:
+            deduped_headers.append((race_no, idx))
+            last_seen_line_for_race[race_no] = idx
+
     races: list[dict[str, Any]] = []
-    chunks = re.split(r"(?=\bRace\s+\d+\b)", text, flags=re.IGNORECASE)
+    LOGGER.info("total races detected: %s", len(deduped_headers))
 
-    for chunk in chunks:
-        header = RACE_HEADER_RE.search(chunk)
-        if not header:
-            continue
+    for h_idx, (race_number, start_idx) in enumerate(deduped_headers):
+        end_idx = deduped_headers[h_idx + 1][1] if h_idx + 1 < len(deduped_headers) else len(lines)
+        race_lines = lines[start_idx:end_idx]
+        context = race_lines[:100]
+        LOGGER.info("race %s detected at line %s", race_number, start_idx + 1)
+        LOGGER.info("first 100 lines around race %s heading:\n%s", race_number, "\n".join(context))
 
-        race_number = int(header.group(1))
         race = {"race_number": race_number, "race_name": f"Race {race_number}", "horses": []}
 
-        runner_lines = [ln for ln in chunk.splitlines() if RUNNER_LINE_RE.match(ln.strip())]
-        for idx, line in enumerate(runner_lines):
-            number = int(RUNNER_LINE_RE.match(line.strip()).group(1))
-            name = _extract_horse_name(line.strip())
+        runner_line_indexes = [i for i, ln in enumerate(race_lines) if _is_runner_line(ln)]
+        for idx_pos, local_line_idx in enumerate(runner_line_indexes):
+            raw_line = race_lines[local_line_idx]
+            line = raw_line.strip()
+            number_match = RUNNER_LINE_RE.match(line)
+            if not number_match:
+                LOGGER.info("runner line skipped (no saddlecloth match): %s", line)
+                continue
+
+            number = int(number_match.group(1))
+            name = _extract_horse_name(line)
             if not name:
+                LOGGER.info("runner line skipped (name parse failed): %s", line)
                 continue
 
             age, sex = _extract_age_sex(line)
             current_weight, claim, apprentice_min, adjusted = _extract_current_weights(line)
 
-            block_start = chunk.find(line)
-            block_end = chunk.find(runner_lines[idx + 1]) if idx + 1 < len(runner_lines) else len(chunk)
-            horse_block = chunk[block_start:block_end]
+            block_start = local_line_idx
+            block_end = runner_line_indexes[idx_pos + 1] if idx_pos + 1 < len(runner_line_indexes) else len(race_lines)
+            horse_block = "\n".join(race_lines[block_start:block_end])
             latest_start = _extract_latest_start(horse_block, sex)
 
             race["horses"].append(
@@ -193,6 +237,7 @@ def parse_races_from_text(text: str) -> list[dict[str, Any]]:
             )
 
         race["horses"].sort(key=lambda h: h["number"])
+        LOGGER.info("race %s horses detected: %s", race_number, len(race["horses"]))
         if race["horses"]:
             races.append(race)
 

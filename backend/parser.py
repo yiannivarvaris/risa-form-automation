@@ -19,13 +19,16 @@ def clean_name(name):
     return name.strip()
 
 
-def extract_horse_name(line):
+def get_horse_name_from_runner_line(line):
     parts = line.split()
 
-    # Remove runner number
+    if len(parts) < 2:
+        return None
+
+    # remove runner number, e.g. 1 or 15e
     parts = parts[1:]
 
-    # Remove last-10 form if present
+    # remove last-10 form, e.g. 20x, 824, 5x6969x2
     if parts and re.match(r"^[0-9xX]+$", parts[0]):
         parts = parts[1:]
 
@@ -47,57 +50,56 @@ def extract_horse_name(line):
 
 def extract_races(text):
     races = []
+    current_race = None
+    in_runner_table = False
 
-    race_blocks = re.split(r"(?=Race\s+\d+\s+-)", text)
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
 
-    for block in race_blocks:
-        race_match = re.search(r"Race\s+(\d+)\s+-", block)
-
-        if not race_match:
+        if not line:
             continue
 
-        race_number = race_match.group(1)
-        race_name = f"Race {race_number}"
+        race_match = re.search(r"Race\s+(\d+)\s+-", line)
+        if race_match:
+            if current_race and current_race["horses"]:
+                races.append(current_race)
 
-        header_match = re.search(
-            r"No\s+Last\s+10\s+Horse\s+Trainer\s+Jockey\s+Barrier\s+Weight.*?Hcp\s+Rating",
-            block,
-            re.DOTALL
-        )
-
-        if not header_match:
+            current_race = {
+                "race_name": f"Race {race_match.group(1)}",
+                "horses": []
+            }
+            in_runner_table = False
             continue
 
-        table_start = header_match.end()
-        table_text = block[table_start:]
+        if current_race and line.startswith("No Last 10 Horse"):
+            in_runner_table = True
+            continue
 
-        if "Trainer:" in table_text:
-            table_text = table_text.split("Trainer:", 1)[0]
+        if current_race and in_runner_table and line.startswith("Trainer:"):
+            in_runner_table = False
+            continue
 
-        horses = []
+        if not current_race or not in_runner_table:
+            continue
 
-        for line in table_text.splitlines():
-            line = line.strip()
+        if not re.match(r"^\d{1,2}e?\s+", line):
+            continue
 
-            if not re.match(r"^\d{1,2}e?\s+", line):
-                continue
+        number = re.match(r"^(\d{1,2})e?", line).group(1)
+        horse_name = get_horse_name_from_runner_line(line)
 
-            number_match = re.match(r"^(\d{1,2})e?", line)
-            number = number_match.group(1)
-
-            horse_name = extract_horse_name(line)
-
-            if horse_name:
-                horses.append({
-                    "number": number,
-                    "name": horse_name
-                })
-
-        if horses:
-            races.append({
-                "race_name": race_name,
-                "horses": horses
+        if horse_name:
+            current_race["horses"].append({
+                "number": number,
+                "name": horse_name
             })
+
+    if current_race and current_race["horses"]:
+        races.append(current_race)
+
+    print("RACES FOUND")
+    for race in races:
+        print(race["race_name"], [horse["name"] for horse in race["horses"]])
 
     return races
 

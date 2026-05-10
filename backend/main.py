@@ -1,10 +1,10 @@
-from excel_writer import create_race_sheet
-from parser import extract_text_from_pdf
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse
 import shutil
 import os
+
 from parser import extract_text_from_pdf
+from excel_writer import create_race_sheet
 
 app = FastAPI()
 

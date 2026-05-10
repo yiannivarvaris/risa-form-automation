@@ -33,7 +33,15 @@ async def generate_form(
 
     text = extract_text_from_pdf(risa_path)
 
+    print("PDF TEXT START")
+    print(text[:5000])
+    print("PDF TEXT END")
+
     races = extract_races(text)
+
+    print("RACES FOUND")
+    for race in races:
+        print(race["race_name"], [horse["name"] for horse in race["horses"]])
 
     write_races_to_excel(
         template_path,

@@ -19,7 +19,8 @@ TRIAL_MARKERS = ("trial", "jump-out", "jump out", "jumpout")
 
 SUSPICIOUS_NAME_FRAGMENTS = (
     "year old", "sire:", "dam:", "trainer:", "jockey:", "record:",
-    "breeder:", "owners:", "colours:", "of 8", "of 10", "1st", "2nd",
+    "breeder:", "owners:", "colours:", "of ", "1st", "2nd", "last race",
+    "other information", "true odds", "actual odds",
 )
 
 SEX_MAP = {"F": "filly", "G": "gelding", "C": "colt", "M": "mare", "R": "rig"}
@@ -85,7 +86,14 @@ def _extract_horse_name(line: str) -> str | None:
     name = " ".join(name_parts)
     name = re.sub(r"\s+\(Blks\)", "", name, flags=re.IGNORECASE)
     name = re.sub(r"\s+EM$", "", name, flags=re.IGNORECASE)
-    return name.strip(" -") or None
+    name = name.strip(" -")
+    if not name:
+        return None
+    if re.fullmatch(r"(?:OF|THE)\s+\d+", name, re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:OF|YEAR|SIRE|DAM)\b", name, re.IGNORECASE) and len(name.split()) <= 3:
+        return None
+    return name
 
 
 def _extract_current_weights(line: str) -> tuple[float | None, float | None, float | None, float | None]:
@@ -210,6 +218,8 @@ def _extract_runner_table_lines(race_lines: list[str], race_number: int) -> list
             break
         if _looks_like_runner_table_header(stripped):
             continue
+        if re.search(r"\b(?:Last race|Other Information|True Odds|Actual Odds|Runner\s+RWF|RWFS|RBFS)\b", stripped, re.IGNORECASE):
+            break
         if _is_suspicious_line(stripped):
             LOGGER.info("race %s: skipped suspicious table line: %s", race_number, stripped)
             continue

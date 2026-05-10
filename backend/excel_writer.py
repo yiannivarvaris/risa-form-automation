@@ -1,54 +1,53 @@
 from openpyxl import load_workbook
 
 
-def write_races_to_excel(template_path, output_path, races):
+def _current_row(horse_number: int) -> int:
+    return 4 + ((horse_number - 1) * 2)
+
+
+def write_races_to_excel(template_path: str, output_path: str, races: list[dict]):
     workbook = load_workbook(template_path)
+    if "template" not in workbook.sheetnames:
+        raise ValueError("Worksheet 'template' is required")
 
     template = workbook["template"]
 
-    # Delete old Race tabs if they already exist
     for sheet_name in list(workbook.sheetnames):
         if sheet_name.startswith("Race "):
             del workbook[sheet_name]
 
     for race in races:
-        new_sheet = workbook.copy_worksheet(template)
-        new_sheet.title = race["race_name"]
+        sheet = workbook.copy_worksheet(template)
+        sheet.title = race["race_name"]
 
-        row = 4
+        for horse in race.get("horses", []):
+            number = horse.get("number")
+            if not isinstance(number, int) or number < 1:
+                continue
 
-        for horse in race["horses"]:
-            # Runner identity
-            new_sheet[f"A{row}"] = horse.get("number")
-            new_sheet[f"B{row}"] = horse["name"]
+            row = _current_row(number)
+            last_row = row + 1
+            latest = horse.get("latest_start") or {}
 
-            # Today's adjusted weight (step 5)
-            new_sheet[f"P{row}"] = horse.get("today_weight")
+            sheet[f"A{row}"] = number
+            sheet[f"B{row}"] = horse.get("name")
+            sheet[f"P{row}"] = horse.get("adjusted_current_weight")
+            sheet[f"U{row}"] = latest.get("class")
+            sheet[f"V{row}"] = horse.get("age_sex")
 
-            # Last-start metrics (steps 6-9)
-            new_sheet[f"D{row+1}"] = horse.get("last_rating")
-            new_sheet[f"E{row+1}"] = horse.get("last_declared_weight")
-            new_sheet[f"I{row+1}"] = horse.get("last_carried_weight")
-            new_sheet[f"K{row+1}"] = horse.get("last_margin")
+            sheet[f"D{last_row}"] = latest.get("rating", 29)
+            sheet[f"E{last_row}"] = latest.get("declared_weight")
+            sheet[f"I{last_row}"] = latest.get("actual_carried_weight")
+            sheet[f"K{last_row}"] = latest.get("beaten_margin")
+            sheet[f"AA{last_row}"] = horse.get("name")
+            sheet[f"AD{last_row}"] = horse.get("name")
+            sheet[f"AE{last_row}"] = latest.get("runs_since_first_up")
+            sheet[f"AF{last_row}"] = latest.get("days_since_last_start")
+            sheet[f"AG{last_row}"] = latest.get("track_record")
+            sheet[f"AH{last_row}"] = latest.get("distance_record")
 
-            # Most recent race class (step 20)
-            new_sheet[f"U{row}"] = horse.get("last_class")
-
-            # 3yo/sex note (step 19)
-            if horse.get("age") == 3 and horse.get("sex"):
-                new_sheet[f"V{row}"] = f"3yo {horse['sex'].lower()}"
-
-            # Repeat horse names in downstream modelling columns (step 10)
-            new_sheet[f"AA{row+1}"] = horse["name"]
-            new_sheet[f"AD{row+1}"] = horse["name"]
-
-            # Remaining required tracking columns (steps 13-16)
-            new_sheet[f"AE{row+1}"] = horse.get("runs_since_first_up")
-            new_sheet[f"AF{row+1}"] = horse.get("days_since_last_start")
-            new_sheet[f"AG{row+1}"] = horse.get("track_record")
-            new_sheet[f"AH{row+1}"] = horse.get("distance_record")
-
-            # Step 17: do not skip rows; each runner goes directly below the previous.
-            row += 1
+            # TODO: template-specific latest start date destination column not provided.
+            # Keeping this in a far-right helper column to avoid disrupting existing layout.
+            sheet[f"AI{last_row}"] = latest.get("date")
 
     workbook.save(output_path)

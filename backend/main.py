@@ -1,10 +1,15 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
-import shutil
+import logging
 import os
+import shutil
 
-from parser import extract_text_from_pdf, extract_races
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import FileResponse
+
 from excel_writer import write_races_to_excel
+from parser import extract_text_from_pdf, parse_races_from_text
+
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -17,7 +22,7 @@ def home():
 @app.post("/generate")
 async def generate_form(
     risa_file: UploadFile = File(...),
-    excel_template: UploadFile = File(...)
+    excel_template: UploadFile = File(...),
 ):
     os.makedirs("uploads", exist_ok=True)
 
@@ -32,25 +37,13 @@ async def generate_form(
         shutil.copyfileobj(excel_template.file, buffer)
 
     text = extract_text_from_pdf(risa_path)
+    races = parse_races_from_text(text)
+    LOGGER.info("Preparing workbook for %s races", len(races))
 
-    print("PDF TEXT START")
-    print(text[:5000])
-    print("PDF TEXT END")
-
-    races = extract_races(text)
-
-    print("RACES FOUND")
-    for race in races:
-        print(race["race_name"], [horse["name"] for horse in race["horses"]])
-
-    write_races_to_excel(
-        template_path,
-        output_path,
-        races
-    )
+    write_races_to_excel(template_path, output_path, races)
 
     return FileResponse(
         output_path,
         filename="completed_form.xlsx",
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )

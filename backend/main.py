@@ -3,8 +3,8 @@ from fastapi.responses import FileResponse
 import shutil
 import os
 
-from parser import extract_text_from_pdf
-from excel_writer import create_race_sheet
+from parser import extract_text_from_pdf, parse_races_from_text
+from excel_writer import write_races_to_excel
 
 app = FastAPI()
 
@@ -30,9 +30,11 @@ async def generate_form(
         shutil.copyfileobj(excel_template.file, buffer)
 
     text = extract_text_from_pdf(risa_path)
-    print(text[:1000])
+    races = parse_races_from_text(text)
 
-    create_race_sheet(template_path, output_path)
+    print(f"Found {len(races)} races")
+
+    write_races_to_excel(template_path, output_path, races)
 
     return FileResponse(
         output_path,

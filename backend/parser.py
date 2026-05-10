@@ -1,6 +1,9 @@
 import fitz
 import re
 
+RACE_HEADER_RE = re.compile(r"\bRace\s+(\d+)\s*[-:]", re.IGNORECASE)
+RUNNER_START_RE = re.compile(r"^(\d{1,2})e?\s+")
+
 
 def extract_text_from_pdf(pdf_path):
     text = ""
@@ -13,89 +16,157 @@ def extract_text_from_pdf(pdf_path):
 
 
 def clean_name(name):
-    name = name.strip()
-    name = re.sub(r"\s+\(Blks\)", "", name)
-    name = re.sub(r"\s+EM$", "", name)
+    name = re.sub(r"\s+", " ", name.strip())
+    name = re.sub(r"\s+\(Blks\)", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\s+EM$", "", name, flags=re.IGNORECASE)
     return name.strip()
 
 
-def get_horse_name_from_runner_line(line):
-    parts = line.split()
+def _is_last10_token(token):
+    # Examples: 20x, 824, 5x6969x2
+    return bool(re.fullmatch(r"[0-9xX]+", token))
 
-    if len(parts) < 2:
-        return None
 
-    # remove runner number, e.g. 1 or 15e
-    parts = parts[1:]
+def _is_horse_token(token):
+    t = token.replace("’", "'")
+    if re.fullmatch(r"\([A-Z]{2,4}\)", t):
+        return True
+    return bool(re.fullmatch(r"[A-Z0-9'\-\.]+", t))
 
-    # remove last-10 form, e.g. 20x, 824, 5x6969x2
-    if parts and re.match(r"^[0-9xX]+$", parts[0]):
+
+def _extract_name_tokens(fragment):
+    parts = fragment.split()
+    if not parts:
+        return []
+
+    if _is_last10_token(parts[0]):
         parts = parts[1:]
 
-    name_parts = []
-
-    for word in parts:
-        clean_word = word.replace("’", "'")
-
-        if clean_word.isupper() or clean_word in ["(NZ)", "(GB)", "(IRE)", "(USA)", "(Blks)", "EM"]:
-            name_parts.append(word)
+    name_tokens = []
+    for token in parts:
+        if _is_horse_token(token):
+            name_tokens.append(token)
         else:
             break
+    return name_tokens
 
-    if not name_parts:
-        return None
 
-    return clean_name(" ".join(name_parts))
+def _should_skip_race(header_line):
+    h = header_line.lower()
+    return "trial" in h or "jump out" in h or "jump-out" in h
 
 
 def extract_races(text):
-    races = []
+    # Keep latest occurrence per race number to satisfy "latest race start".
+    races_by_number = {}
+
+    current_race_num = None
     current_race = None
     in_runner_table = False
+    current_runner = None
 
-    for raw_line in text.splitlines():
+    lines = text.splitlines()
+
+    def finalize_runner():
+        nonlocal current_runner, current_race
+        if not current_race or not current_runner:
+            current_runner = None
+            return
+
+        name = clean_name(" ".join(current_runner["name_tokens"]))
+        if name:
+            current_race["horses"].append({
+                "number": current_runner["number"],
+                "name": name,
+            })
+        current_runner = None
+
+    def finalize_race():
+        nonlocal current_race_num, current_race
+        if not current_race_num or not current_race:
+            return
+
+        # Keep order and de-duplicate by runner number inside race.
+        deduped = []
+        seen = set()
+        for horse in current_race["horses"]:
+            key = horse["number"]
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(horse)
+        current_race["horses"] = deduped
+
+        if current_race["horses"]:
+            races_by_number[current_race_num] = current_race
+
+    for raw_line in lines:
         line = raw_line.strip()
-
         if not line:
             continue
 
-        race_match = re.search(r"Race\s+(\d+)\s+-", line)
+        race_match = RACE_HEADER_RE.search(line)
         if race_match:
-            if current_race and current_race["horses"]:
-                races.append(current_race)
+            finalize_runner()
+            finalize_race()
+
+            race_num = int(race_match.group(1))
+            current_race_num = race_num
+
+            if _should_skip_race(line):
+                current_race = None
+                in_runner_table = False
+                continue
 
             current_race = {
-                "race_name": f"Race {race_match.group(1)}",
-                "horses": []
+                "race_name": f"Race {race_num}",
+                "horses": [],
             }
             in_runner_table = False
             continue
 
-        if current_race and line.startswith("No Last 10 Horse"):
-            in_runner_table = True
+        if not current_race:
             continue
 
-        if current_race and in_runner_table and line.startswith("Trainer:"):
+        lower = line.lower()
+
+        # Runner table header can vary slightly across PDFs.
+        if ("no" in lower and "horse" in lower and "last" in lower) or lower.startswith("no horse"):
+            in_runner_table = True
+            finalize_runner()
+            continue
+
+        if not in_runner_table:
+            continue
+
+        # End of runners section.
+        if lower.startswith("trainer:") or lower.startswith("track") or lower.startswith("stewards"):
+            finalize_runner()
             in_runner_table = False
             continue
 
-        if not current_race or not in_runner_table:
+        m = RUNNER_START_RE.match(line)
+        if m:
+            finalize_runner()
+            runner_number = m.group(1)
+            after_num = line[m.end():]
+            name_tokens = _extract_name_tokens(after_num)
+            current_runner = {
+                "number": runner_number,
+                "name_tokens": name_tokens,
+            }
             continue
 
-        if not re.match(r"^\d{1,2}e?\s+", line):
-            continue
+        # Handle wrapped runner lines: append upper-case horse tokens only.
+        if current_runner:
+            continuation_tokens = _extract_name_tokens(line)
+            if continuation_tokens:
+                current_runner["name_tokens"].extend(continuation_tokens)
 
-        number = re.match(r"^(\d{1,2})e?", line).group(1)
-        horse_name = get_horse_name_from_runner_line(line)
+    finalize_runner()
+    finalize_race()
 
-        if horse_name:
-            current_race["horses"].append({
-                "number": number,
-                "name": horse_name
-            })
-
-    if current_race and current_race["horses"]:
-        races.append(current_race)
+    races = [races_by_number[k] for k in sorted(races_by_number.keys())]
 
     print("RACES FOUND")
     for race in races:

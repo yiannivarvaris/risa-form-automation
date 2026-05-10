@@ -1,20 +1,18 @@
 from openpyxl import load_workbook
-from copy import copy
 
-def create_race_sheet(template_path, output_path):
+def write_races_to_excel(template_path, output_path, races):
     workbook = load_workbook(template_path)
 
     template = workbook["template"]
 
-    new_sheet = workbook.copy_worksheet(template)
-    new_sheet.title = "Race 1"
+    for race in races:
+        new_sheet = workbook.copy_worksheet(template)
+        new_sheet.title = race["race_name"]
 
-    # Test data for now
-    new_sheet["B4"] = "TEST HORSE"
-    new_sheet["P4"] = 58
-    new_sheet["D5"] = 59
-    new_sheet["E5"] = 58
-    new_sheet["I5"] = 56
-    new_sheet["K5"] = 2.5
+        row = 4
+
+        for horse in race["horses"]:
+            new_sheet[f"B{row}"] = horse["name"]
+            row += 2
 
     workbook.save(output_path)

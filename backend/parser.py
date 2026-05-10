@@ -15,7 +15,6 @@ def extract_text_from_pdf(pdf_path):
 def clean_horse_name(name):
     name = name.strip()
 
-    # Remove common junk at end
     junk_words = [
         "M", "G", "K", "J", "C", "A", "B", "D",
         "Rtg", "Rating", "Trainer", "Jockey"
@@ -51,7 +50,6 @@ def parse_races_from_text(text):
         for line in lines:
             line = line.strip()
 
-            # Match runner number then horse name
             match = re.match(r"^(\d{1,2})\s+([A-Z][A-Z '\-]+)", line)
 
             if not match:
@@ -67,7 +65,6 @@ def parse_races_from_text(text):
             if len(horse_name) < 3:
                 continue
 
-            # Ignore obvious non-horse lines
             bad_words = [
                 "RACE", "TRACK", "DISTANCE", "TRAINER",
                 "JOCKEY", "PRIZE", "TOTAL", "FIELD"
@@ -93,6 +90,5 @@ def parse_races_from_text(text):
     return races
 
 
-# This keeps main.py working if it uses extract_races
 def extract_races(text):
     return parse_races_from_text(text)

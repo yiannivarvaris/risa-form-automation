@@ -220,6 +220,15 @@ def parse_races_from_text(text: str) -> list[dict[str, Any]]:
             block_end = runner_line_indexes[idx_pos + 1] if idx_pos + 1 < len(runner_line_indexes) else len(race_lines)
             horse_block = "\n".join(race_lines[block_start:block_end])
             latest_start = _extract_latest_start(horse_block, sex)
+            LOGGER.info(
+                "latest real start selected race=%s horse=%s #%s class=%s date=%s rating=%s",
+                race_number,
+                name,
+                number,
+                latest_start.get("class"),
+                latest_start.get("date"),
+                latest_start.get("rating"),
+            )
 
             race["horses"].append(
                 {
@@ -242,6 +251,7 @@ def parse_races_from_text(text: str) -> list[dict[str, Any]]:
             races.append(race)
 
     races.sort(key=lambda r: r["race_number"])
+    LOGGER.info("sorted race numbers: %s", [r["race_number"] for r in races])
     horse_count = sum(len(r["horses"]) for r in races)
     LOGGER.info("Extracted %s races and %s horses from guide", len(races), horse_count)
     return races

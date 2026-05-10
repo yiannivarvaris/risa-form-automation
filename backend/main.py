@@ -3,6 +3,7 @@ import os
 import shutil
 
 from fastapi import FastAPI, File, UploadFile
+from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
 from excel_writer import write_races_to_excel
@@ -39,6 +40,8 @@ async def generate_form(
     text = extract_text_from_pdf(risa_path)
     races = parse_races_from_text(text)
     LOGGER.info("Preparing workbook for %s races", len(races))
+    if not races:
+        raise HTTPException(status_code=422, detail="No races extracted from PDF")
 
     write_races_to_excel(template_path, output_path, races)
 

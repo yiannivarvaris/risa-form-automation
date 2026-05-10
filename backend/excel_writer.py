@@ -23,10 +23,10 @@ def write_races_to_excel(template_path: str, output_path: str, races: list[dict]
     sorted_races = sorted(races, key=lambda r: int(r.get("race_number", 0)))
     LOGGER.info("sorted race numbers for excel write: %s", [r.get("race_number") for r in sorted_races])
 
-    for race in sorted_races:
+    for index, race in enumerate(sorted_races, start=1):
         race_number = int(race.get("race_number", 0))
         sheet = workbook.copy_worksheet(template)
-        sheet.title = f"Race {race_number}"
+        sheet.title = f"Race {index}"
         LOGGER.info("created race sheet: %s", sheet.title)
 
         sorted_horses = sorted(

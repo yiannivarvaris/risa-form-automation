@@ -1,9 +1,9 @@
 import fitz
 import re
 
-
 def extract_text_from_pdf(pdf_path):
     text = ""
+
     pdf = fitz.open(pdf_path)
 
     for page in pdf:
@@ -12,54 +12,42 @@ def extract_text_from_pdf(pdf_path):
     return text
 
 
-def clean_horse_name(name):
-    name = name.strip()
-    name = re.sub(r"\s+\(Blks\)", "", name)
-    name = re.sub(r"\s+\(NZ\)", " (NZ)", name)
-    name = re.sub(r"\s+EM$", "", name)
-    return name.strip()
-
-
 def extract_races(text):
-    races = []
+    races = {}
 
-    race_blocks = re.split(r"(?=Race\s+\d+\s+-)", text)
+    current_race = None
 
-    for block in race_blocks:
-        race_match = re.search(r"Race\s+(\d+)\s+-", block)
+    lines = text.splitlines()
 
-        if not race_match:
+    for line in lines:
+
+        line = line.strip()
+
+        # Detect race headers
+        race_match = re.search(r"Race\s+(\d+)", line, re.IGNORECASE)
+
+        if race_match:
+            race_number = race_match.group(1)
+            current_race = f"Race {race_number}"
+            races[current_race] = []
             continue
 
-        race_number = race_match.group(1)
-        race_name = f"Race {race_number}"
+        # Detect horse lines
+        horse_match = re.match(r"^(\d+)\s+([A-Z][A-Z '\-]+)", line)
 
-        horses = []
+        if horse_match and current_race:
 
-        lines = block.splitlines()
+            horse_name = horse_match.group(2).strip()
 
-        for line in lines:
-            line = line.strip()
+            # Clean weird junk
+            horse_name = re.sub(r"\s+", " ", horse_name)
 
-            match = re.match(r"^(\d{1,2})e?\s+(?:[0-9xX]+)?\s*([A-Z][A-Z '\-’\(\)]+)", line)
+            if len(horse_name) > 2:
+                races[current_race].append(horse_name)
 
-            if match:
-                horse_number = match.group(1)
-                horse_name = clean_horse_name(match.group(2))
+    print("RACES FOUND")
 
-                if len(horse_name) > 2:
-                    horses.append({
-                        "number": horse_number,
-                        "name": horse_name
-                    })
-
-        races.append({
-            "race_name": race_name,
-            "horses": horses
-        })
+    for race, horses in races.items():
+        print(race, horses)
 
     return races
-
-
-def parse_races_from_text(text):
-    return extract_races(text)

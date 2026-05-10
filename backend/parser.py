@@ -48,6 +48,24 @@ def get_horse_name_from_runner_line(line):
     return clean_name(" ".join(name_parts))
 
 
+def get_age_and_sex_from_runner_line(line):
+    # Common compact token in AU form guides, e.g. "3F", "4G", "5M", "6C"
+    match = re.search(r"\b(\d{1,2})([FGCMR])\b", line)
+    if not match:
+        return None, None
+
+    age = int(match.group(1))
+    sex_code = match.group(2)
+    sex_map = {
+        "F": "Filly",
+        "G": "Gelding",
+        "C": "Colt",
+        "M": "Mare",
+        "R": "Rig",
+    }
+    return age, sex_map.get(sex_code)
+
+
 def extract_races(text):
     races = []
     current_race = None
@@ -89,9 +107,23 @@ def extract_races(text):
         horse_name = get_horse_name_from_runner_line(line)
 
         if horse_name:
+            age, sex = get_age_and_sex_from_runner_line(line)
             current_race["horses"].append({
                 "number": number,
-                "name": horse_name
+                "name": horse_name,
+                "age": age,
+                "sex": sex,
+                # Populated when source data is detected; kept explicit for writer mapping.
+                "today_weight": None,
+                "last_rating": None,
+                "last_declared_weight": None,
+                "last_carried_weight": None,
+                "last_margin": None,
+                "last_class": None,
+                "runs_since_first_up": None,
+                "days_since_last_start": None,
+                "track_record": None,
+                "distance_record": None,
             })
 
     if current_race and current_race["horses"]:

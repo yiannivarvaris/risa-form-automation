@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 import shutil
 import os
 from parser import extract_text_from_pdf
+
 app = FastAPI()
 
 @app.get("/")
@@ -16,18 +17,18 @@ async def generate_form(
 ):
     os.makedirs("uploads", exist_ok=True)
 
-risa_path = f"uploads/{risa_file.filename}"
+    risa_path = f"uploads/{risa_file.filename}"
+    template_path = f"uploads/{excel_template.filename}"
+    output_path = "uploads/completed_form.xlsx"
 
-text = extract_text_from_pdf(risa_path)
-print(text[:1000])
-
-template_path = f"uploads/{excel_template.filename}"
-output_path = "uploads/completed_form.xlsx"
     with open(risa_path, "wb") as buffer:
         shutil.copyfileobj(risa_file.file, buffer)
 
     with open(template_path, "wb") as buffer:
         shutil.copyfileobj(excel_template.file, buffer)
+
+    text = extract_text_from_pdf(risa_path)
+    print(text[:1000])
 
     shutil.copy(template_path, output_path)
 

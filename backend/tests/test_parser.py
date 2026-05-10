@@ -29,5 +29,8 @@ Race 1
 1 of 8
 4 year old bay gelding Sire: TEST Dam: TEST
 """
-    races = parse_races_from_text(text)
-    assert races == []
+    try:
+        parse_races_from_text(text)
+        assert False, "Expected ValueError when no horses are extracted"
+    except ValueError:
+        assert True
